@@ -1,0 +1,95 @@
+---
+title: "Rcpp nanoflann"
+author: "Thell"
+date: "12/16/2014"
+output: html_document
+---
+
+Timing and output information in response to [SOQ-27321856](http://stackoverflow.com/questions/27321856/closest-point-to-a-path).
+
+__using path and centers *values* as defined in the orginal question__
+
+````{r setup, echo=FALSE}
+set.seed(1)
+n <- 10000
+x <- 100*cumprod(1 + rnorm(n, 0.0001, 0.002))
+y <- 50*cumprod(1 + rnorm(n, 0.0001, 0.002))
+
+path <- data.frame(cbind(x=x, y=y))
+
+centers <- expand.grid(x=seq(0, 500,by=0.5) + rnorm(1001), 
+                       y=seq(0, 500, by=0.2) + rnorm(2501))
+````
+
+To achieve identical results to the original the RANN solution needs
+slight modification which we time here...
+
+````{r}
+library(RANN)
+system.time(o.flann<-unique(as.numeric(nn2(centers,path,1)$nn.idx)))
+````
+
+The Rcppnanoflann solution takes advantage of Rcpp, RcppEigen and
+the nanoflann EigenMatrixAdaptor along with the c++11 <set> to yield
+identical unique indexes to the original question.
+````{r}
+library(Rcppnanoflann)
+system.time(o.nano<-nnIndex(centers,path))
+````
+
+````{r}
+identical(o.flann,o.nano)
+````
+
+The working function of Rcppnanoflann takes advantage of Eigen's Map
+capabilities to create the input for a fixed type Eigen matrix from
+the given `P` dataframe.
+
+I tested the RcppParallel package but the kd_tree object does not have
+a copy constructor, so the tree needed to be created for each thread
+which ate up any gains in the parallel query processing.
+
+RcppEigen and Rcpp11 currently don't play together so the idea of
+using Rcpp11's parallel sapply for the query isn't easily tested.
+
+````{r,eval=FALSE,tidy=TRUE}
+// [[Rcpp::export]]
+std::vector<double> nnIndex(const Rcpp::DataFrame & P, const Rcpp::DataFrame & Q )
+{
+  using namespace Eigen;
+  using namespace Rcpp;
+  using namespace nanoflann;
+
+  // Matrix of points to be queried against.
+  const NumericVector & Px(P[0]);
+  const NumericVector & Py(P[1]);
+  MatrixX2d M(Px.size(), 2);
+  M.col(0) = VectorXd::Map(&Px[0],Px.size());
+  M.col(1) = VectorXd::Map(&Py[0],Py.size());
+
+  // The points to query.
+  const NumericVector & Qx(Q[0]);
+  const NumericVector & Qy(Q[1]);
+  double query_pt[2];
+  size_t query_count(Qx.size());
+
+  // Populate a 2d tree.
+  KD_Tree kd_tree( 2, M, 10 );
+  kd_tree.index->buildIndex();
+
+  std::set<size_t> nn;
+  std::vector<double> out;
+  out.reserve(query_count);
+
+  size_t index(0);
+  double quadrance;
+  for( size_t i=0 ; i < query_count; ++i ) {
+    query_pt[0] = Qx[i];
+    query_pt[1] = Qy[i];
+    kd_tree.index->knnSearch( &query_pt[0],1, &index, &quadrance);
+    if( nn.emplace(index).second ) out.emplace_back(index+1);
+  }
+
+  return out;
+}
+````
