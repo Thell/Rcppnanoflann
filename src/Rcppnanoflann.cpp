@@ -51,7 +51,7 @@ std::vector<double> nnIndex(const Rcpp::DataFrame & P, const Rcpp::DataFrame & Q
     query_pt[0] = Qx[i];
     query_pt[1] = Qy[i];
     kd_tree.index->knnSearch( &query_pt[0],1, &index, &quadrance);
-    if( nn.emplace(index).second ) out.emplace_back(index+1);
+    if( nn.insert(index).second ) out.emplace_back(index+1);
   }
 
   return out;
